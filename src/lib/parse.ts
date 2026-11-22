@@ -3,6 +3,15 @@ import type { DayStat, HourlyDay, Message, MsgType, ParsedChat } from "./types";
 const DATE_RE = /^(\d{4})\/(\d{2})\/(\d{2})\(.\)\s*$/;
 const MSG_RE = /^(\d{2}):(\d{2})\t([^\t]+)\t(.*)$/;
 
+/** Date lines without tabs/parentheses, e.g. `2025.12.06 土曜日` or `2025/12/06`. */
+const DATE_SPACED_RE = /^(\d{4})[./-](\d{2})[./-](\d{2})(?:[ \t]+.*)?$/;
+/** Message lines without tabs, e.g. `21:09 名前 本文`. */
+const MSG_SPACED_RE = /^(\d{2}):(\d{2})[ \t]+(\S+)(?:[ \t]+(.*))?$/;
+
+/** Chat notices that should not count as messages. */
+const SYSTEM_NOTICE_RE =
+  /メッセージの送信を取り消しました|トークを通話に切り替えました|通話が終了しました/;
+
 const TYPE_MARKERS: Record<string, MsgType> = {
   "[スタンプ]": "stamp",
   "[写真]": "photo",
@@ -15,7 +24,7 @@ const TYPE_MARKERS: Record<string, MsgType> = {
 };
 const MARKER_SET = new Set(Object.keys(TYPE_MARKERS));
 
-/** LINE's exported text is UTF-8; BOM must be stripped or the first line breaks. */
+/** LINE's exported text may start with a UTF-8 BOM; strip it or the first line breaks. */
 export function normalizeSource(text: string): string {
   return text.replace(/^﻿/, "");
 }
@@ -72,25 +81,30 @@ export function minutesSinceEpoch(m: Message): number {
   );
 }
 
-/**
- * Parses a LINE "トーク履歴" text export.
- * Returns null when no dated message could be found.
- */
-export function parseLineChat(input: string): ParsedChat | null {
-  const text = normalizeSource(input);
-  const hasLoneCR = /\r/.test(text) && !/\r\n/.test(text);
-  const simple =
-    !hasLoneCR &&
-    text.indexOf(String.fromCharCode(0x2028)) < 0 &&
-    text.indexOf(String.fromCharCode(0x2029)) < 0;
+interface DayAccumulator {
+  total: number;
+  bySender: Map<string, number>;
+  chars: number;
+  hours: number[];
+}
 
-  let chatTitle: string | null = null;
-  const perDay = new Map<string, { total: number; bySender: Map<string, number>; chars: number; hours: number[] }>();
+interface Accumulator {
+  perDay: Map<string, DayAccumulator>;
+  perSender: Map<string, number>;
+  messages: Message[];
+  currentDate: string | null;
+  setDate: (m: RegExpExecArray) => void;
+  push: (time: string, hour: number, minute: number, sender: string, rawContent: string) => void;
+  build: (chatTitle: string | null) => ParsedChat | null;
+}
+
+function createAccumulator(): Accumulator {
+  const perDay = new Map<string, DayAccumulator>();
   const perSender = new Map<string, number>();
   const messages: Message[] = [];
 
   let currentDate: string | null = null;
-  let currentDay: { total: number; bySender: Map<string, number>; chars: number; hours: number[] } | null = null;
+  let currentDay: DayAccumulator | null = null;
   let dayOffset = 0;
 
   const push = (time: string, hour: number, minute: number, sender: string, rawContent: string) => {
@@ -135,16 +149,71 @@ export function parseLineChat(input: string): ParsedChat | null {
     dayOffset = dayMs(currentDate) / 6e4;
   };
 
+  const build = (chatTitle: string | null): ParsedChat | null => {
+    const dates = [...perDay.keys()].sort();
+    if (dates.length === 0) return null;
+
+    const ranked = [...perSender.entries()].sort((x, y) => y[1] - x[1]).map(([name]) => name);
+    const nameA = ranked[0] || "A";
+    const nameB = ranked[1] || "B";
+
+    const RAW: DayStat[] = dates.map((date) => {
+      const d = perDay.get(date)!;
+      return {
+        date,
+        total: d.total,
+        a: d.bySender.get(nameA) || 0,
+        b: d.bySender.get(nameB) || 0,
+        chars: d.chars,
+      };
+    });
+    const HOURLY_BY_DAY: HourlyDay[] = dates.map((date) => ({
+      date,
+      hours: perDay.get(date)!.hours,
+    }));
+
+    return {
+      RAW,
+      HOURLY_BY_DAY,
+      names: { a: nameA, b: nameB },
+      chatTitle,
+      messageCount: RAW.reduce((sum, d) => sum + d.total, 0),
+      messages,
+    };
+  };
+
+  return {
+    perDay,
+    perSender,
+    messages,
+    get currentDate() {
+      return currentDate;
+    },
+    setDate,
+    push,
+    build,
+  };
+}
+
+function titleFromText(text: string): string | null {
+  const firstLine = text.split(/\r\n|\r|\n/, 1)[0] || "";
+  const m = /^\[LINE\]\s*(.+?)とのトーク履歴/.exec(firstLine.replace(/﻿/g, ""));
+  return m ? m[1].trim() : null;
+}
+
+/**
+ * Standard LINE export: tab separated, dates like `2025/12/06(土)`.
+ * Uses the fast single-pass path when the text has consistent line endings.
+ */
+function parseStandard(text: string, acc: Accumulator): ParsedChat | null {
+  const hasLoneCR = /\r/.test(text) && !/\r\n/.test(text);
+  const simple =
+    !hasLoneCR &&
+    text.indexOf(String.fromCharCode(0x2028)) < 0 &&
+    text.indexOf(String.fromCharCode(0x2029)) < 0;
+
   if (simple) {
     const total = text.length;
-    let lineStart = 0;
-    let next = text.indexOf("\n");
-    if (next < 0) next = total;
-    let head = text.slice(0, next);
-    if (head.charCodeAt(head.length - 1) === 13) head = head.slice(0, -1);
-    const title = /^\[LINE\]\s*(.+?)とのトーク履歴/.exec(head);
-    if (title) chatTitle = title[1].trim();
-
     const senderCache: string[] = [];
     let tabHint = -1;
     let pos = 0;
@@ -167,7 +236,7 @@ export function parseLineChat(input: string): ParsedChat | null {
 
       if (len > 2 && text.charCodeAt(start + 2) === 58) {
         // "HH:" — message line
-        if (currentDate === null || len < 8) continue;
+        if (acc.currentDate === null || len < 8) continue;
         const h1 = text.charCodeAt(start) - 48;
         const h2 = text.charCodeAt(start + 1) - 48;
         const m1 = text.charCodeAt(start + 3) - 48;
@@ -200,7 +269,7 @@ export function parseLineChat(input: string): ParsedChat | null {
           sender = text.slice(start + 6, tab);
           if (senderCache.length < 8) senderCache.push(sender);
         }
-        push(
+        acc.push(
           text.slice(start, start + 5),
           h1 * 10 + h2,
           m1 * 10 + m2,
@@ -209,56 +278,74 @@ export function parseLineChat(input: string): ParsedChat | null {
         );
       } else if (len === 13) {
         const dm = DATE_RE.exec(text.slice(start, trimEnd));
-        if (dm) setDate(dm);
+        if (dm) acc.setDate(dm);
       }
     }
   } else {
-    const lines = text.split(/\r?\n/);
-    const title = /^\[LINE\]\s*(.+?)とのトーク履歴/.exec(lines[0] || "");
-    if (title) chatTitle = title[1].trim();
+    const lines = text.split(/\r\n|\r|\n/);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trimEnd();
       if (line.length === 0) continue;
       if (line.charCodeAt(2) !== 58) {
         const dm = DATE_RE.exec(line);
-        if (dm) setDate(dm);
+        if (dm) acc.setDate(dm);
         continue;
       }
       const mm = MSG_RE.exec(line);
-      if (mm && currentDate !== null) {
-        push(`${mm[1]}:${mm[2]}`, parseInt(mm[1], 10), parseInt(mm[2], 10), mm[3], mm[4]);
+      if (mm && acc.currentDate !== null) {
+        acc.push(`${mm[1]}:${mm[2]}`, parseInt(mm[1], 10), parseInt(mm[2], 10), mm[3], mm[4]);
       }
     }
   }
 
-  const dates = [...perDay.keys()].sort();
-  if (dates.length === 0) return null;
+  return acc.build(titleFromText(text));
+}
 
-  const ranked = [...perSender.entries()].sort((x, y) => y[1] - x[1]).map(([name]) => name);
-  const nameA = ranked[0] || "A";
-  const nameB = ranked[1] || "B";
+/**
+ * Exports without tabs or parentheses, e.g.:
+ *   2025.12.06 土曜日
+ *   21:09 名前 本文
+ * The sender is the first token after the time.
+ */
+function parseSpaced(text: string, acc: Accumulator): ParsedChat | null {
+  const lines = text.split(/\r\n|\r|\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trimEnd();
+    if (line.length === 0) continue;
 
-  const RAW: DayStat[] = dates.map((date) => {
-    const d = perDay.get(date)!;
-    return {
-      date,
-      total: d.total,
-      a: d.bySender.get(nameA) || 0,
-      b: d.bySender.get(nameB) || 0,
-      chars: d.chars,
-    };
-  });
-  const HOURLY_BY_DAY: HourlyDay[] = dates.map((date) => ({
-    date,
-    hours: perDay.get(date)!.hours,
-  }));
+    const dm = DATE_SPACED_RE.exec(line);
+    if (dm) {
+      acc.setDate(dm);
+      continue;
+    }
 
-  return {
-    RAW,
-    HOURLY_BY_DAY,
-    names: { a: nameA, b: nameB },
-    chatTitle,
-    messageCount: RAW.reduce((sum, d) => sum + d.total, 0),
-    messages,
-  };
+    const mm = MSG_SPACED_RE.exec(line);
+    if (mm && acc.currentDate !== null) {
+      const content = mm[4];
+      // Lines like "21:12 Nutsがメッセージの送信を取り消しました" are notices,
+      // not messages from a participant.
+      if (!content || SYSTEM_NOTICE_RE.test(content)) continue;
+      acc.push(
+        `${mm[1]}:${mm[2]}`,
+        parseInt(mm[1], 10),
+        parseInt(mm[2], 10),
+        mm[3],
+        content,
+      );
+    }
+  }
+
+  return acc.build(titleFromText(text));
+}
+
+/**
+ * Parses a LINE "トーク履歴" text export.
+ * Supports the standard tab-separated format and the space-separated
+ * `YYYY.MM.DD 曜日` variant. Returns null when no dated message was found.
+ */
+export function parseLineChat(input: string): ParsedChat | null {
+  const text = normalizeSource(input);
+  const standard = parseStandard(text, createAccumulator());
+  if (standard) return standard;
+  return parseSpaced(text, createAccumulator());
 }

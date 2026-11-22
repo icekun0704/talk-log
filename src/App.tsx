@@ -47,7 +47,7 @@ export default function App() {
     try {
       const parsed = parseLineChat(text);
       if (!parsed) {
-        setError("メッセージが見つかりませんでした。LINEの「トーク履歴を送信」で書き出したテキストファイルを選んでください。");
+        setError("メッセージが見つかりませんでした。LINEの「トーク履歴を送信」で書き出した .txt を選んでください（例：「2025/12/06(土)」または「2025.12.06 土曜日」の日付行が必要です）。");
         return;
       }
       setChat(parsed);
