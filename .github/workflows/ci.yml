@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Type check and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (type check + single-file bundle)
+        run: npm run build
+
+      - name: Verify single-file output
+        run: |
+          set -euo pipefail
+          test -s dist/index.html
+          test -s line_chat_analyzer_web.html
+          # The built file must be self-contained: no external module/script references.
+          if grep -qE '<script[^>]+src="/|href="/assets/' line_chat_analyzer_web.html; then
+            echo "::error::line_chat_analyzer_web.html contains non-inlined assets"
+            exit 1
+          fi
+          echo "single-file size: $(wc -c < line_chat_analyzer_web.html) bytes"
+
+      - name: Upload single-file build
+        uses: actions/upload-artifact@v4
+        with:
+          name: talk-log-single-file
+          path: line_chat_analyzer_web.html
+          retention-days: 14

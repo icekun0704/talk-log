@@ -1,5 +1,8 @@
 # トーク分析 — Talk Log Analyzer
 
+[![CI](https://github.com/yutopias09/talk-log/actions/workflows/ci.yml/badge.svg)](https://github.com/yutopias09/talk-log/actions/workflows/ci.yml)
+[![Deploy to GitHub Pages](https://github.com/yutopias09/talk-log/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/yutopias09/talk-log/actions/workflows/deploy-pages.yml)
+
 LINEのトーク履歴（テキスト書き出し）を読み込んで、ふたりの会話を可視化するローカル分析ツールです。
 データはブラウザの中だけで処理され、サーバーへの送信は一切ありません。
 
@@ -64,6 +67,20 @@ legacy/
 - シェアカードは Canvas 2D で描画し、端末内でPNG化
 - 単一HTML出力は `vite-plugin-singlefile`
 
+## 公開（GitHub Pages）
+
+`main` に push すると GitHub Actions が自動でビルドし、GitHub Pages に公開します
+（`.github/workflows/deploy-pages.yml`）。手動実行は Actions タブの「Deploy to GitHub Pages」→「Run workflow」から。
+
+初回だけ、リポジトリの **Settings → Pages → Build and deployment → Source** を
+**GitHub Actions** に設定してください。公開URLは通常 `https://yutopias09.github.io/talk-log/` です。
+
+### CI
+
+`.github/workflows/ci.yml` が push / pull request 時に型チェックとビルドを実行し、
+単一HTMLが外部アセットを参照していないこと（自己完結していること）を検証します。
+ビルド成果物は Actions の Artifacts からダウンロードできます。
+
 ## プライバシー
 
 - 読み込んだファイルは `FileReader` でブラウザ内だけに読み込まれます
@@ -73,3 +90,4 @@ legacy/
 ## 旧版
 
 `legacy/line_chat_analyzer_web.html` に、リニューアル前の単一HTML版を残しています。
+
