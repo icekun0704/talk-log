@@ -1,15 +1,17 @@
 # トーク分析 — Talk Log Analyzer
 
 [![CI](https://github.com/yutopias09/talk-log/actions/workflows/ci.yml/badge.svg)](https://github.com/yutopias09/talk-log/actions/workflows/ci.yml)
-[![Deploy to GitHub Pages](https://github.com/yutopias09/talk-log/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/yutopias09/talk-log/actions/workflows/deploy-pages.yml)
 
 LINEのトーク履歴（テキスト書き出し）を読み込んで、ふたりの会話を可視化するローカル分析ツールです。
 データはブラウザの中だけで処理され、サーバーへの送信は一切ありません。
 
+公開版: <https://yutopias09.github.io/talk-log/>
+
 ## すぐに使う
 
-`line_chat_analyzer_web.html` をブラウザで開くだけです。ビルド済みの単一HTMLなので、
-ローカルサーバーやインストールは不要です。ファイルを開いたら「サンプルで試す」で動作を確認できます。
+`index.html` または `line_chat_analyzer_web.html` をブラウザで開くだけです。
+どちらもビルド済みの単一HTMLなので、ローカルサーバーやインストールは不要です。
+ファイルを開いたら「サンプルで試す」で動作を確認できます。
 
 1. LINEのトーク画面右上の設定を開く
 2. 「トーク履歴を送信」→「テキストファイル」を選ぶ
@@ -39,13 +41,16 @@ LINEのトーク履歴（テキスト書き出し）を読み込んで、ふた�
 
 ```bash
 npm install
-npm run dev      # http://localhost:5173
-npm run build    # 型チェック → dist/ に単一HTMLを生成し、line_chat_analyzer_web.html にコピー
+npm run dev      # http://localhost:5173 （/ は app.html へ内部リダイレクト）
+npm run build    # 型チェック → 単一HTMLを index.html / line_chat_analyzer_web.html / dist/index.html に生成
 ```
 
 ### 構成
 
 ```
+app.html               Vite の開発エントリ（ソース）
+index.html             ビルド済みアプリ（GitHub Pages が配信するルート）
+line_chat_analyzer_web.html  同じビルドの単一HTML（従来のファイル名）
 src/
   App.tsx              アプリシェル、ファイル読み込み、画面切り替え
   nav.ts               画面定義とナビゲーション
@@ -58,28 +63,40 @@ src/
     sample.ts          サンプルデータ生成
   components/          アイコン、汎用UI、SVGチャート
   views/               12画面
+scripts/
+  copy-single.mjs      ビルド結果を単一HTMLとして配置・検証
 legacy/
   line_chat_analyzer_web.html   旧・単一HTML版（参考用）
 ```
 
 - React 18 + TypeScript + Vite
-- チャートは外部ライブラリを使わない手書きSVG（軽量・テーマ追従・キーボード／スクリーンリーダー向けの説明付き）
+- チャートは外部ライブラリを使わない手書きSVG（軽量・テーマ追従・スクリーンリーダー向けの説明付き）
 - シェアカードは Canvas 2D で描画し、端末内でPNG化
 - 単一HTML出力は `vite-plugin-singlefile`
 
 ## 公開（GitHub Pages）
 
-`main` に push すると GitHub Actions が自動でビルドし、GitHub Pages に公開します
-（`.github/workflows/deploy-pages.yml`）。手動実行は Actions タブの「Deploy to GitHub Pages」→「Run workflow」から。
+GitHub Pages は **main ブランチのルート** を配信する設定です。ルートの `index.html` が
+そのままアプリになるため、追加のデプロイ設定なしで公開されます。
 
-初回だけ、リポジトリの **Settings → Pages → Build and deployment → Source** を
-**GitHub Actions** に設定してください。公開URLは通常 `https://yutopias09.github.io/talk-log/` です。
+```bash
+npm run build
+git add index.html line_chat_analyzer_web.html
+git commit -m "Rebuild standalone HTML"
+git push
+```
 
-### CI
+push すると GitHub の Pages ビルドが走り、数十秒で反映されます。
 
-`.github/workflows/ci.yml` が push / pull request 時に型チェックとビルドを実行し、
-単一HTMLが外部アセットを参照していないこと（自己完結していること）を検証します。
-ビルド成果物は Actions の Artifacts からダウンロードできます。
+## CI
+
+`.github/workflows/ci.yml` が push / pull request 時に次を実行します。
+
+- `npm ci` → 型チェック → 単一HTMLビルド
+- 生成物が自己完結していること（外部アセット参照がないこと）を検証
+- コミット済みの `index.html` / `line_chat_analyzer_web.html` がビルド結果と一致するか検証
+  （古い場合は失敗するので、`npm run build` してコミットしてください）
+- ビルド済みHTMLを Actions の Artifacts にアップロード
 
 ## プライバシー
 
@@ -90,4 +107,3 @@ legacy/
 ## 旧版
 
 `legacy/line_chat_analyzer_web.html` に、リニューアル前の単一HTML版を残しています。
-

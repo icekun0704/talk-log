@@ -36,19 +36,29 @@ jobs:
       - name: Build (type check + single-file bundle)
         run: npm run build
 
-      - name: Verify single-file output
+      - name: Verify standalone output
         run: |
           set -euo pipefail
-          test -s dist/index.html
+          test -s index.html
           test -s line_chat_analyzer_web.html
-          # The built file must be self-contained: no external module/script references.
-          if grep -qE '<script[^>]+src="/|href="/assets/' line_chat_analyzer_web.html; then
-            echo "::error::line_chat_analyzer_web.html contains non-inlined assets"
+          test -s dist/index.html
+          cmp --silent index.html line_chat_analyzer_web.html
+          grep -q '<div id="root"></div>' index.html
+          if grep -qE '<script[^>]+src="/|href="/assets/' index.html; then
+            echo "::error::index.html contains non-inlined assets"
             exit 1
           fi
-          echo "single-file size: $(wc -c < line_chat_analyzer_web.html) bytes"
+          echo "single-file size: $(wc -c < index.html) bytes"
 
-      - name: Upload single-file build
+      - name: Ensure build artifacts are committed
+        run: |
+          if ! git diff --quiet -- index.html line_chat_analyzer_web.html; then
+            echo "::error::ビルド成果物が最新ではありません。'npm run build' を実行し、index.html と line_chat_analyzer_web.html をコミットしてください。"
+            git diff --stat -- index.html line_chat_analyzer_web.html
+            exit 1
+          fi
+
+      - name: Upload standalone build
         uses: actions/upload-artifact@v4
         with:
           name: talk-log-single-file
